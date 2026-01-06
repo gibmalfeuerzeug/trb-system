@@ -2,123 +2,107 @@ import discord
 from discord.ext import commands
 import os
 import asyncio
+import re
 from collections import defaultdict
-from datetime import datetime, timedelta
+from dotenv import load_dotenv
 
-intents = discord.Intents.all()
-bot = commands.Bot(command_prefix="!", intents=intents)
+load_dotenv()
 
-# =====================
-# CONFIG
-# =====================
-SPAM_LIMIT = 5            # Nachrichten
-SPAM_SECONDS = 5          # Sekunden
-MENTION_LIMIT = 5         # Erwähnungen pro Nachricht
+TOKEN = os.getenv("DISCORD_TOKEN")
 
-ALLOWED_BOT_ROLES = []    # Rollen-IDs, die Bots einladen dürfen
+INTENTS = discord.Intents.all()
+bot = commands.Bot(command_prefix="!", intents=INTENTS)
 
-LOG_CHANNEL_NAME = "security-logs"
+# ---------------- CONFIG ---------------- #
 
-# =====================
-# SPAM TRACKER
-# =====================
-message_cache = defaultdict(list)
+SPAM_LIMIT = 5          # Nachrichten
+SPAM_TIME = 6           # Sekunden
+TIMEOUT_DURATION = 10   # Minuten
 
-# =====================
-# EVENTS
-# =====================
+INVITE_REGEX = re.compile(r"(discord\.gg\/|discord\.com\/invite\/)", re.IGNORECASE)
+
+message_logs = defaultdict(list)
+
+# ---------------------------------------- #
+
+def is_whitelisted(member: discord.Member):
+    if member.guild.owner_id == member.id:
+        return True
+
+    bot_member = member.guild.me
+    return member.top_role > bot_member.top_role
+
+# ---------------------------------------- #
 
 @bot.event
 async def on_ready():
-    print(f"✅ Bot online als {bot.user}")
+    print(f"[SECURITY] Bot online als {bot.user}")
+
+# ----------- ANTI BOT INVITE ------------- #
+
+@bot.event
+async def on_member_join(member):
+    if member.bot and not is_whitelisted(member):
+        await member.kick(reason="Anti Bot Invite")
+        print(f"[SECURITY] Bot {member} gekickt")
+
+# ----------- ANTI WEBHOOK ---------------- #
+
+@bot.event
+async def on_webhooks_update(channel):
+    guild = channel.guild
+    webhooks = await channel.webhooks()
+
+    for webhook in webhooks:
+        creator = webhook.user
+        if creator and not is_whitelisted(creator):
+            await webhook.delete(reason="Anti Webhook")
+            print(f"[SECURITY] Webhook gelöscht in {channel}")
+
+# --------------- ANTI SPAM --------------- #
 
 @bot.event
 async def on_message(message):
-    if message.author.bot:
+    if message.author.bot or not message.guild:
         return
 
-    now = datetime.utcnow()
-    user_msgs = message_cache[message.author.id]
+    if is_whitelisted(message.author):
+        return
 
-    user_msgs.append(now)
-    message_cache[message.author.id] = [
-        t for t in user_msgs if now - t < timedelta(seconds=SPAM_SECONDS)
+    # Invite Spam
+    if INVITE_REGEX.search(message.content):
+        await message.delete()
+        await punish(message.author, "Invite Spam")
+        return
+
+    # Message Spam
+    now = message.created_at.timestamp()
+    logs = message_logs[message.author.id]
+    logs.append(now)
+
+    message_logs[message.author.id] = [
+        t for t in logs if now - t <= SPAM_TIME
     ]
 
-    # Anti-Spam
-    if len(message_cache[message.author.id]) > SPAM_LIMIT:
-        await message.delete()
-        await message.channel.send(
-            f"⚠️ {message.author.mention} bitte kein Spam!",
-            delete_after=5
-        )
-        return
-
-    # Anti-Mention-Spam
-    if len(message.mentions) >= MENTION_LIMIT:
-        await message.delete()
-        await message.channel.send(
-            f"⚠️ {message.author.mention} Mention-Spam erkannt!",
-            delete_after=5
-        )
+    if len(message_logs[message.author.id]) >= SPAM_LIMIT:
+        await punish(message.author, "Spam")
+        message_logs[message.author.id].clear()
         return
 
     await bot.process_commands(message)
 
-@bot.event
-async def on_webhooks_update(channel):
-    async for entry in channel.guild.audit_logs(limit=1, action=discord.AuditLogAction.webhook_create):
-        webhook = entry.target
-        await webhook.delete()
+# --------------- PUNISH ------------------ #
 
-        log = await get_log_channel(channel.guild)
-        await log.send(f"🚫 Webhook gelöscht in {channel.mention}")
+async def punish(member: discord.Member, reason: str):
+    try:
+        await member.timeout(
+            discord.utils.utcnow() + discord.timedelta(minutes=TIMEOUT_DURATION),
+            reason=f"Security: {reason}"
+        )
+        print(f"[SECURITY] {member} getimeouted ({reason})")
+    except:
+        pass
 
-@bot.event
-async def on_member_join(member):
-    if member.bot:
-        allowed = False
-        for role in member.guild.roles:
-            if role.id in ALLOWED_BOT_ROLES:
-                allowed = True
+# ---------------------------------------- #
 
-        if not allowed:
-            await member.kick(reason="Anti-Bot Invite")
-            log = await get_log_channel(member.guild)
-            await log.send(f"🤖 Bot **{member.name}** automatisch gekickt")
-
-# =====================
-# HELPERS
-# =====================
-
-async def get_log_channel(guild):
-    channel = discord.utils.get(guild.text_channels, name=LOG_CHANNEL_NAME)
-    if not channel:
-        channel = await guild.create_text_channel(LOG_CHANNEL_NAME)
-    return channel
-
-# =====================
-# COMMANDS
-# =====================
-
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def ping(ctx):
-    await ctx.send("🏓 Pong!")
-
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def security(ctx):
-    embed = discord.Embed(
-        title="🛡 Security Bot",
-        description="Anti-Spam | Anti-Webhook | Anti-Bot-Invite",
-        color=discord.Color.red()
-    )
-    await ctx.send(embed=embed)
-
-# =====================
-# START
-# =====================
-
-TOKEN = os.getenv("DISCORD_TOKEN")
 bot.run(TOKEN)
