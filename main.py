@@ -165,7 +165,7 @@ async def on_ready():
     log(f"Bot online als {bot.user} (ID: {bot.user.id})")
     await bot.change_presence(
         status=discord.Status.online,
-        activity=discord.Game("Spielt mit Iron Guard")
+        activity=discord.Game("Spielt mit Vipex´s Mutter")
     )
 
     asyncio.create_task(notify_owner_after_restart())
