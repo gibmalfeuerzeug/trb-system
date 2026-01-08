@@ -397,7 +397,7 @@ async def create_webhook(interaction: discord.Interaction, channel: discord.Text
 @bot.tree.command(name="help", description="Zeigt alle verfügbaren Bot-Befehle")
 async def help_command(interaction: discord.Interaction):
     embed = discord.Embed(
-        title="🛡️Iron Guard – Hilfe",
+        title="🛡️TRB SYSTEM – Hilfe",
         description="Hier findest du alle verfügbaren Befehle und Funktionen dieses Bots.",
         color=discord.Color.from_rgb(0, 0, 0)  # Schwarz
     )
